@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+myenv/
+
+# Frontend
+_frontend/
+
+# Dev/test
+_test_client_dummy/
+documents/
+
+# Credentials (injected via Secret Manager / env vars in Cloud Run)
+*.json
+
+# Misc
+.git/
+.env

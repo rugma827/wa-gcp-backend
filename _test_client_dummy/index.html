@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>wa-backend Test Client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 2rem; }
+    h1 { color: #10b981; margin-bottom: 0.25rem; font-size: 1.25rem; }
+    .subtitle { color: #64748b; font-size: 0.8rem; margin-bottom: 2rem; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; max-width: 600px; }
+    .card h2 { font-size: 0.9rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.25rem; margin-top: 0.75rem; }
+    input { width: 100%; padding: 0.5rem 0.75rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-size: 0.875rem; }
+    input:focus { outline: none; border-color: #10b981; }
+    button { margin-top: 1rem; padding: 0.5rem 1.25rem; background: #10b981; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 0.875rem; font-weight: 600; }
+    button:hover { background: #059669; }
+    button:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    button.secondary { background: #1e40af; }
+    button.secondary:hover { background: #1d4ed8; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    .status { margin-top: 1rem; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+    .status.ok { background: #064e3b; border: 1px solid #10b981; color: #6ee7b7; }
+    .status.err { background: #450a0a; border: 1px solid #dc2626; color: #fca5a5; }
+    .status.info { background: #1e3a5f; border: 1px solid #3b82f6; color: #93c5fd; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; margin-left: 0.5rem; }
+    .badge.green { background: #064e3b; color: #10b981; }
+    .badge.red { background: #450a0a; color: #f87171; }
+    .badge.grey { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .token-display { font-size: 0.7rem; color: #475569; word-break: break-all; margin-top: 0.5rem; font-family: monospace; }
+    hr { border: none; border-top: 1px solid #334155; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+
+<h1>wa-backend Test Client</h1>
+<p class="subtitle">Tests: Firebase Login → check-auth → Google Calendar OAuth → upcoming-events</p>
+
+<!-- Firebase config hardcoded — not shown in UI -->
+<input id="fbApiKey" type="hidden" value="AIzaSyB2GpPKkxVrYgqPAlTLhEEvJWDfvirDXeY" />
+<input id="fbAuthDomain" type="hidden" value="agentic-wealthadvisor.firebaseapp.com" />
+<input id="fbProjectId" type="hidden" value="agentic-wealthadvisor" />
+
+<!-- ── STEP 1: CONFIG ─────────────────────────────────────────────────── -->
+<div class="card">
+  <h2>Config</h2>
+  <label>Backend URL</label>
+  <input id="backendUrl" value="http://localhost:8000" />
+  <button onclick="initFirebase()">Connect</button>
+  <div id="configStatus"></div>
+</div>
+
+<!-- ── STEP 2: LOGIN ──────────────────────────────────────────────────── -->
+<div class="card">
+  <h2>Step 1 — Firebase Login
+    <span id="loginBadge" class="badge grey">not logged in</span>
+  </h2>
+  <label>Email</label>
+  <input id="email" type="email" placeholder="advisor@yourdomain.com" />
+  <label>Password</label>
+  <input id="password" type="password" placeholder="••••••••" />
+  <div class="row">
+    <button onclick="doLogin()">Sign In</button>
+    <button class="danger" onclick="doLogout()">Sign Out</button>
+  </div>
+  <div id="loginStatus"></div>
+  <div id="tokenDisplay" class="token-display"></div>
+</div>
+
+<!-- ── STEP 3: CHECK-AUTH ─────────────────────────────────────────────── -->
+<div class="card">
+  <h2>Step 2 — Check Calendar Auth
+    <span id="calAuthBadge" class="badge grey">unknown</span>
+  </h2>
+  <p style="font-size:0.8rem;color:#64748b;margin-top:0.5rem">
+    Calls <code>POST /meeting-prep/check-auth</code> with Bearer token.<br>
+    If not connected → returns 401 + authorization_url → opens OAuth popup.
+  </p>
+  <div class="row">
+    <button onclick="doCheckAuth()">Check Auth</button>
+    <button class="secondary" onclick="doConnectCalendar()">Connect Google Calendar</button>
+  </div>
+  <div id="checkAuthStatus"></div>
+</div>
+
+<!-- ── STEP 4: CALENDAR EVENTS ────────────────────────────────────────── -->
+<div class="card">
+  <h2>Step 3 — Fetch Calendar Events</h2>
+  <p style="font-size:0.8rem;color:#64748b;margin-top:0.5rem">
+    Calls <code>POST /meeting-prep/upcoming-events</code> — today + tomorrow.
+  </p>
+  <button onclick="doFetchCalendar()">Fetch Events</button>
+  <div id="calendarStatus"></div>
+</div>
+
+<!-- ── STEP 5: HEALTH ─────────────────────────────────────────────────── -->
+<div class="card">
+  <h2>Backend Health</h2>
+  <button onclick="doHealth()">GET /health</button>
+  <div id="healthStatus"></div>
+</div>
+
+<!-- Firebase SDK via CDN -->
+<script type="module">
+  import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+    from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+
+  // ── State ──────────────────────────────────────────────────────────────
+  let auth = null;
+  let idToken = null;
+  let authUrl = null;
+  let pollTimer = null;
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  function backend() { return document.getElementById('backendUrl').value.trim().replace(/\/$/, ''); }
+
+  function show(id, msg, type = 'info') {
+    const el = document.getElementById(id);
+    el.className = `status ${type}`;
+    el.textContent = typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg;
+  }
+
+  function badge(id, text, color) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = `badge ${color}`;
+  }
+
+  async function getToken() {
+    if (!auth?.currentUser) return null;
+    return auth.currentUser.getIdToken(false);
+  }
+
+  // ── Init Firebase ──────────────────────────────────────────────────────
+  // Auto-init on page load
+  window.addEventListener('load', () => window.initFirebase());
+
+  window.initFirebase = function() {
+    const apiKey = document.getElementById('fbApiKey').value.trim();
+    const authDomain = document.getElementById('fbAuthDomain').value.trim();
+    const projectId = document.getElementById('fbProjectId').value.trim();
+    if (!apiKey) { show('configStatus', 'Firebase API key missing', 'err'); return; }
+
+    try {
+      const existing = getApps();
+      const app = existing.length > 0
+        ? existing[0]
+        : initializeApp({ apiKey, authDomain, projectId });
+      auth = getAuth(app);
+
+      onAuthStateChanged(auth, async (user) => {
+        if (user) {
+          idToken = await user.getIdToken(false);
+          badge('loginBadge', user.email, 'green');
+          document.getElementById('tokenDisplay').textContent = `uid: ${user.uid}\ntoken: ${idToken.slice(0, 60)}...`;
+        } else {
+          idToken = null;
+          badge('loginBadge', 'not logged in', 'red');
+          document.getElementById('tokenDisplay').textContent = '';
+        }
+      });
+
+      show('configStatus', 'Firebase initialised ✓', 'ok');
+    } catch (e) {
+      show('configStatus', `Init failed: ${e.message}`, 'err');
+    }
+  };
+
+  // ── Login ──────────────────────────────────────────────────────────────
+  window.doLogin = async function() {
+    if (!auth) { show('loginStatus', 'Click "Connect" first', 'err'); return; }
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    try {
+      const result = await signInWithEmailAndPassword(auth, email, password);
+      idToken = await result.user.getIdToken(false);
+      show('loginStatus', `Signed in as ${result.user.email}\nuid: ${result.user.uid}`, 'ok');
+    } catch (e) {
+      show('loginStatus', `Login failed: ${e.code}\n${e.message}`, 'err');
+    }
+  };
+
+  window.doLogout = async function() {
+    if (!auth) return;
+    await signOut(auth);
+    idToken = null;
+    show('loginStatus', 'Signed out', 'info');
+    badge('calAuthBadge', 'unknown', 'grey');
+  };
+
+  // ── Check Auth ─────────────────────────────────────────────────────────
+  window.doCheckAuth = async function() {
+    const token = await getToken();
+    if (!token) { show('checkAuthStatus', 'Sign in first', 'err'); return; }
+
+    try {
+      const res = await fetch(`${backend()}/meeting-prep/check-auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.status === 'authenticated') {
+        badge('calAuthBadge', 'authenticated', 'green');
+        show('checkAuthStatus', data, 'ok');
+      } else if (res.status === 401 && data.detail?.authorization_url) {
+        authUrl = data.detail.authorization_url;
+        badge('calAuthBadge', 'not connected', 'red');
+        show('checkAuthStatus', `Not connected — auth URL ready.\nClick "Connect Google Calendar" to open OAuth popup.\n\n${JSON.stringify(data.detail, null, 2)}`, 'info');
+      } else {
+        show('checkAuthStatus', data, 'err');
+      }
+    } catch (e) {
+      show('checkAuthStatus', `Request failed: ${e.message}`, 'err');
+    }
+  };
+
+  // ── Connect Calendar (OAuth popup) ────────────────────────────────────
+  window.doConnectCalendar = async function() {
+    // If no authUrl yet, fetch it first
+    if (!authUrl) {
+      await window.doCheckAuth();
+      if (!authUrl) { show('checkAuthStatus', 'Could not get auth URL — check-auth first', 'err'); return; }
+    }
+
+    const w = 500, h = 650;
+    const left = Math.round(window.screenX + (window.outerWidth - w) / 2);
+    const top = Math.round(window.screenY + (window.outerHeight - h) / 2);
+    const popup = window.open(authUrl, 'googleAuth',
+      `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`);
+
+    if (!popup) {
+      show('checkAuthStatus', 'Popup blocked — allow popups for localhost and retry', 'err');
+      return;
+    }
+
+    show('checkAuthStatus', 'Popup opened — complete Google sign-in...\nPolling every 3s for up to 5 minutes.', 'info');
+
+    // Listen for postMessage from oauth-callback popup HTML
+    window.addEventListener('message', async (event) => {
+      if (event.data?.type === 'google_auth_success') {
+        clearInterval(pollTimer);
+        if (!popup.closed) popup.close();
+        badge('calAuthBadge', 'authenticated', 'green');
+        show('checkAuthStatus', 'Google Calendar connected ✓', 'ok');
+        authUrl = null;
+      }
+    }, { once: true });
+
+    // Also poll check-auth in case postMessage doesn't fire
+    const start = Date.now();
+    pollTimer = setInterval(async () => {
+      if (Date.now() - start > 5 * 60 * 1000) { clearInterval(pollTimer); return; }
+
+      if (popup.closed) {
+        clearInterval(pollTimer);
+        await window.doCheckAuth();
+        return;
+      }
+
+      const token = await getToken();
+      if (!token) return;
+      try {
+        const res = await fetch(`${backend()}/meeting-prep/check-auth`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'authenticated') {
+          clearInterval(pollTimer);
+          if (!popup.closed) popup.close();
+          badge('calAuthBadge', 'authenticated', 'green');
+          show('checkAuthStatus', 'Google Calendar connected ✓', 'ok');
+          authUrl = null;
+        }
+      } catch { /* ignore poll errors */ }
+    }, 3000);
+  };
+
+  // ── Fetch Calendar Events ──────────────────────────────────────────────
+  window.doFetchCalendar = async function() {
+    const token = await getToken();
+    if (!token) { show('calendarStatus', 'Sign in first', 'err'); return; }
+
+    try {
+      const res = await fetch(`${backend()}/meeting-prep/upcoming-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ day_offset: 0, num_days: 2 }),
+      });
+      const data = await res.json();
+
+      if (res.status === 401) {
+        badge('calAuthBadge', 'token expired', 'red');
+        show('calendarStatus', 'Calendar token expired — reconnect Google Calendar', 'err');
+        return;
+      }
+      if (!res.ok) { show('calendarStatus', data, 'err'); return; }
+
+      const events = data.events || [];
+      if (events.length === 0) {
+        show('calendarStatus', 'No events found for today/tomorrow', 'info');
+        return;
+      }
+      const summary = events.map(e =>
+        `${e.start?.dateTime || e.start?.date || '?'}  —  ${e.summary || '(no title)'}`
+      ).join('\n');
+      show('calendarStatus', `${events.length} event(s):\n\n${summary}`, 'ok');
+    } catch (e) {
+      show('calendarStatus', `Request failed: ${e.message}`, 'err');
+    }
+  };
+
+  // ── Health ─────────────────────────────────────────────────────────────
+  window.doHealth = async function() {
+    try {
+      const res = await fetch(`${backend()}/health`);
+      const data = await res.json();
+      show('healthStatus', data, res.ok ? 'ok' : 'err');
+    } catch (e) {
+      show('healthStatus', `Cannot reach backend: ${e.message}`, 'err');
+    }
+  };
+</script>
+</body>
+</html>

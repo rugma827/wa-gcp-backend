@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+myenv/
+
+# Environment
+.env
+
+# Credentials
+*.json

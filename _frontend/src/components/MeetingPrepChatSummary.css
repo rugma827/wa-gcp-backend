@@ -1,0 +1,190 @@
+.mpc-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 420px;
+}
+
+.mpc-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.mpc-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.mpc-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+}
+
+.mpc-name {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mpc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.1rem;
+}
+
+.mpc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+}
+
+.mpc-pill--warn { border-color: rgba(245,158,11,0.35); color: #f59e0b; }
+
+.mpc-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.mpc-open-btn:hover {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.mpc-open-btn--footer {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* KPI row */
+.mpc-kpis {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mpc-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  flex: 1;
+  min-width: 80px;
+}
+
+.mpc-kpi span:first-child {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.mpc-kpi span:last-child {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.mpc-kpi--warn { border-left: 3px solid #f59e0b; }
+.mpc-kpi--warn span:first-child { color: #f59e0b; }
+
+.mpc-kpi--accent { border-left: 3px solid var(--success); }
+.mpc-kpi--accent span:first-child { color: var(--success); }
+
+/* Profile intro */
+.mpc-intro {
+  padding: 0.5rem 0.65rem;
+  font-size: 0.78125rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-left: 3px solid var(--success);
+  border-radius: var(--radius-sm);
+}
+
+/* Rows */
+.mpc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+
+.mpc-row-icon { flex-shrink: 0; margin-top: 2px; color: var(--text-tertiary); }
+.mpc-row-icon--warn   { color: #f59e0b; }
+.mpc-row-icon--accent { color: var(--success); }
+
+.mpc-row-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.mpc-row-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mpc-row-detail {
+  font-size: 0.71875rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  width: 100%;
+}
+
+/* Severity badges */
+.mpc-badge {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.5625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.mpc-badge--high,
+.mpc-badge--critical { background: rgba(239,68,68,0.12); color: #ef4444; border-color: rgba(239,68,68,0.25); }
+.mpc-badge--medium   { background: rgba(245,158,11,0.12); color: #f59e0b; border-color: rgba(245,158,11,0.25); }
+.mpc-badge--low      { background: rgba(16,185,129,0.1);  color: var(--success); border-color: rgba(16,185,129,0.2); }
