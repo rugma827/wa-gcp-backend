@@ -8,3 +8,8 @@ myenv/
 
 # Credentials
 *.json
+
+# Local folders
+_frontend/
+_test_client_dummy/
+documents/
