@@ -11,7 +11,7 @@ UI contract (unchanged from AWS version):
   GET  /meeting-prep/oauth-callback      → exchanges code, stores token, closes popup
   POST /meeting-prep/calendar-events     → {"events":[...]}
   POST /meeting-prep/upcoming-events     → {"events":[...]}
-  POST /meeting-prep/client-prep-direct  → {"result":"meeting_prep_pending","task_id":"..."}
+  POST /meeting-prep/client-prep-direct  → {"result":"meeting_prep_complete","task_id":"...","meetings":[{"data":{"client_id":"...","meeting_id":"...","reply":"...","result":{...}}}]}
   GET  /meeting-prep/snapshot            → MCP step result JSON
   GET  /meeting-prep/risks               → MCP step result JSON
   GET  /meeting-prep/angles              → MCP step result JSON
@@ -23,6 +23,7 @@ import io
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -108,10 +109,12 @@ def _make_flow() -> Flow:
     """Build a Google OAuth Flow from the credentials stored in Secret Manager."""
     raw = _get_secret("google-oauth-credentials")
     creds_dict = json.loads(raw)
+    # Secret may be stored as {"web": {...}} or flat {"client_id": ...}
+    web = creds_dict.get("web", creds_dict)
     client_config = {
         "web": {
-            "client_id": creds_dict["client_id"],
-            "client_secret": creds_dict["client_secret"],
+            "client_id": web["client_id"],
+            "client_secret": web["client_secret"],
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [_OAUTH_REDIRECT_URI],
@@ -147,13 +150,14 @@ def _build_calendar_service(uid: str):
 
     creds_raw = _get_secret("google-oauth-credentials")
     creds_dict = json.loads(creds_raw)
+    web = creds_dict.get("web", creds_dict)
 
     creds = Credentials(
         token=token_data.get("access_token"),
         refresh_token=token_data.get("refresh_token"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=creds_dict["client_id"],
-        client_secret=creds_dict["client_secret"],
+        client_id=web["client_id"],
+        client_secret=web["client_secret"],
         scopes=_OAUTH_SCOPES,
     )
 
@@ -221,7 +225,7 @@ class BaseRequest(BaseModel):
 
 class ClientPrepDirectRequest(BaseModel):
     user_id: Optional[str] = None
-    client_name: str
+    client_name: str  # UI sends client name; backend builds the MCP task string
     force_refresh: bool = False
 
 
@@ -380,6 +384,7 @@ def _fetch_calendar_events(uid: str, day_offset: int, num_days: int) -> dict:
             .execute()
         )
         events = result.get("items", [])
+        _store_calendar_events_context(events)
         return {"events": events}
     except Exception as exc:
         err_str = str(exc).lower()
@@ -393,47 +398,117 @@ def _fetch_calendar_events(uid: str, day_offset: int, num_days: int) -> dict:
         raise HTTPException(status_code=502, detail="Failed to fetch calendar events")
 
 
-# ── 5. client-prep-direct (main prep trigger) ─────────────────────────────────
+def _store_calendar_events_context(events: list) -> None:
+    """Write calendar events into meeting_context so event IDs can be resolved later."""
+    today = cache_today()
+    for ev in events:
+        meeting_id = ev.get("id")
+        client_name = ev.get("summary", "").strip()
+        if not meeting_id or not client_name:
+            continue
+        if get_meeting_context(meeting_id, today):
+            continue
+        put_meeting_context({
+            "meeting_id": meeting_id,
+            "date": today,
+            "client_id": "",
+            "client_name": client_name,
+            "source": "calendar_fetch",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+
+def _is_calendar_event_id(value: str) -> bool:
+    """Calendar event IDs are long alphanumeric strings, not client names."""
+    return len(value) > 20 and bool(re.match(r'^[a-zA-Z0-9_]+$', value))
+
+
+def _resolve_client_name_from_event(uid: str, event_id: str) -> Optional[str]:
+    """Resolve client name from event ID — checks BQ meeting_context first, then Google Calendar API."""
+    # 1. Check BQ — already stored at calendar fetch time
+    ctx = get_meeting_context(event_id, cache_today())
+    if ctx and ctx.get("client_name"):
+        return ctx["client_name"]
+    # 2. Fall back to live Google Calendar API call
+    service = _build_calendar_service(uid)
+    if service is None:
+        return None
+    try:
+        event = service.events().get(calendarId="primary", eventId=event_id).execute()
+        return event.get("summary") or None
+    except Exception as exc:
+        logger.warning("Could not resolve calendar event %s: %s", event_id, exc)
+        return None
+
 
 @router.post("/client-prep-direct")
 async def client_prep_direct(req: ClientPrepDirectRequest, uid: str = Depends(verify_token)):
-    """On-demand meeting prep for any client by name.
+    """On-demand meeting prep. Passes free-form task to wa-mcp for name resolution.
 
-    Calls get_meeting_brief on wa-mcp. Returns task_id for UI polling.
-    UI contract: {"result":"meeting_prep_pending","task_id":"...","meetings":[]}
+    UI contract: {"result":"meeting_prep_complete","task_id":"...","meetings":[...]}
     """
     today = cache_today()
     client_name = req.client_name.strip()
-    cache_key = f"cockpit#{client_name.lower().replace(' ', '_')}"
 
-    if not req.force_refresh:
-        cached = get_cached(cache_key, today)
-        if cached:
-            return {"result": "cached", "meetings": [cached]}
+    # If frontend sent a calendar event ID instead of a name, resolve it first
+    if _is_calendar_event_id(client_name):
+        resolved = _resolve_client_name_from_event(uid, client_name)
+        if resolved:
+            logger.info("[client-prep-direct] resolved event_id=%s to client_name=%r", client_name, resolved)
+            client_name = resolved
+        else:
+            logger.warning("[client-prep-direct] could not resolve event_id=%s, using as-is", client_name)
 
-    meeting_id = f"direct_{client_name.lower().replace(' ', '_')}"
-    _ensure_meeting_context(client_name, meeting_id, today)
+    task = f"Generate full meeting brief for {client_name}"
+    logger.info("[client-prep-direct] task=%r mcp_url=%s", task, _MCP_URL)
 
-    # Call wa-mcp — returns full brief
-    task = f"Prepare meeting brief for {client_name}"
-    result = await _call_mcp_tool("get_meeting_brief", {
-        "task": task,
-        "meeting_id": meeting_id,
-    })
+    # Call wa-mcp — MCP resolves client id from the name in the task
+    result = await _call_mcp_tool("get_meeting_brief", {"task": task})
+    logger.info("[client-prep-direct] mcp_status=%s mcp_keys=%s", result.get("status"), list(result.get("data", {}).keys()))
 
-    if result.get("status") == "ok" or result.get("status") == "partial":
-        brief_data = result.get("data", {}).get("result", result.get("data", {}))
-        put_cached(cache_key, today, brief_data)
-        return {
-            "result": "meeting_prep_complete",
-            "task_id": meeting_id,
-            "meetings": [{"type": "meeting_prep", "data": brief_data, "meeting_id": meeting_id}],
-        }
+    status = result.get("status")
+    if status == "needs_input":
+        raise HTTPException(status_code=422, detail=result.get("question", "More input required"))
+    if status not in ("ok", "partial"):
+        raise HTTPException(status_code=502, detail=result.get("data", {}).get("message", "Meeting prep failed"))
 
-    raise HTTPException(status_code=502, detail=result.get("data", {}).get("reply", "Meeting prep failed"))
+    data = result.get("data", {})
+    # MCP returns client_id and meeting_id at top of data; structured brief is in data.result
+    meeting_id = data.get("meeting_id") or f"direct_{uuid.uuid4().hex[:8]}"
+    client_id = data.get("client_id", "")
+    brief = data.get("result", data)  # structured fields (client, holdings, risk, …) the UI reads
+    cache_key = f"cockpit#{meeting_id}"
+
+    if not req.force_refresh or not get_cached(cache_key, today):
+        _ensure_meeting_context(client_id, meeting_id, today)
+        put_cached(cache_key, today, brief)
+
+    return {
+        "result": "meeting_prep_complete",
+        "task_id": meeting_id,
+        "meetings": [{"type": "meeting_prep", "data": brief, "meeting_id": meeting_id}],
+    }
 
 
 # ── 6–9. Step-level MCP endpoints ────────────────────────────────────────────
+
+def _mcp_args(task: str, meeting_id: Optional[str]) -> dict:
+    args = {"task": task}
+    if meeting_id:
+        args["meeting_id"] = meeting_id
+    return args
+
+
+def _unwrap_mcp(result: dict) -> dict:
+    """Raise on error/needs_input; return data payload on ok/partial."""
+    status = result.get("status")
+    if status in ("ok", "partial"):
+        return result.get("data", {})
+    if status == "needs_input":
+        raise HTTPException(status_code=422, detail=result.get("question", "More input required"))
+    raise HTTPException(status_code=502, detail=result.get("data", {}).get("message", "MCP step failed"))
+
 
 @router.get("/snapshot")
 async def get_snapshot(
@@ -442,11 +517,8 @@ async def get_snapshot(
     uid: str = Depends(verify_token),
 ):
     """Step 1 — Portfolio Snapshot via wa-mcp."""
-    return await _call_mcp_tool("get_portfolio_snapshot", {
-        "task": f"Portfolio snapshot for {client_name}",
-        "client_id": None,
-        "meeting_id": meeting_id,
-    })
+    result = await _call_mcp_tool("get_portfolio_snapshot", _mcp_args(f"Portfolio snapshot for {client_name}", meeting_id))
+    return _unwrap_mcp(result)
 
 
 @router.get("/risks")
@@ -456,11 +528,8 @@ async def get_risks(
     uid: str = Depends(verify_token),
 ):
     """Step 2 — Risks & Opportunities via wa-mcp."""
-    return await _call_mcp_tool("get_risks_and_opportunities", {
-        "task": f"Risks and opportunities for {client_name}",
-        "client_id": None,
-        "meeting_id": meeting_id,
-    })
+    result = await _call_mcp_tool("get_risks_and_opportunities", _mcp_args(f"Risks and opportunities for {client_name}", meeting_id))
+    return _unwrap_mcp(result)
 
 
 @router.get("/angles")
@@ -470,11 +539,8 @@ async def get_angles(
     uid: str = Depends(verify_token),
 ):
     """Step 3 — Discussion Angles via wa-mcp."""
-    return await _call_mcp_tool("get_discussion_angles", {
-        "task": f"Discussion angles for {client_name}",
-        "client_id": None,
-        "meeting_id": meeting_id,
-    })
+    result = await _call_mcp_tool("get_discussion_angles", _mcp_args(f"Discussion angles for {client_name}", meeting_id))
+    return _unwrap_mcp(result)
 
 
 @router.get("/activity")
@@ -484,11 +550,8 @@ async def get_activity(
     uid: str = Depends(verify_token),
 ):
     """Step 4 — Recent Activity via wa-mcp."""
-    return await _call_mcp_tool("get_recent_activity", {
-        "task": f"Recent activity for {client_name}",
-        "client_id": None,
-        "meeting_id": meeting_id,
-    })
+    result = await _call_mcp_tool("get_recent_activity", _mcp_args(f"Recent activity for {client_name}", meeting_id))
+    return _unwrap_mcp(result)
 
 
 # ── 10. download-pptx ────────────────────────────────────────────────────────
