@@ -10,6 +10,7 @@ _frontend/
 # Dev/test
 _test_client_dummy/
 documents/
+CPython-312-33/
 
 # Credentials (injected via Secret Manager / env vars in Cloud Run)
 *.json
