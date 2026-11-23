@@ -184,7 +184,14 @@ async def _call_mcp_tool(tool_name: str, arguments: dict) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            resp = await client.post(_MCP_URL, json=payload)
+            resp = await client.post(
+                _MCP_URL,
+                json=payload,
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+            )
             resp.raise_for_status()
             body = resp.json()
             # MCP response: {"result": {"content": [{"type":"text","text":"..."}]}}
