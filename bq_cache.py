@@ -1,7 +1,7 @@
 """BigQuery cache helpers — replaces DynamoDB dynamo_cache.py.
 
 Tables in dataset BQ_MEETING_DATASET (wealth_meeting_prep):
-  meeting_prep_cache  — step/brief cache  (cache_key STRING, date STRING, payload JSON STRING)
+  meeting_prep_cache  — step/brief cache  (cache_key STRING, date STRING, data JSON STRING)
   meeting_context     — per-meeting rows  (meeting_id STRING, date STRING, ...)
 """
 
@@ -38,7 +38,7 @@ def today() -> str:
 
 def get_cached(cache_key: str, date: str) -> Optional[dict]:
     query = f"""
-        SELECT payload FROM `{_CACHE_TABLE}`
+        SELECT data FROM `{_CACHE_TABLE}`
         WHERE cache_key = @key AND date = @date
         LIMIT 1
     """
@@ -51,7 +51,7 @@ def get_cached(cache_key: str, date: str) -> Optional[dict]:
     try:
         rows = list(_client().query(query, job_config=job_config).result())
         if rows:
-            return json.loads(rows[0]["payload"])
+            return json.loads(rows[0]["data"])
     except Exception as exc:
         logger.warning("BQ get_cached failed for %s: %s", cache_key, exc)
     return None
@@ -61,7 +61,7 @@ def put_cached(cache_key: str, date: str, data: dict) -> None:
     row = {
         "cache_key": cache_key,
         "date": date,
-        "payload": json.dumps(data),
+        "data": json.dumps(data),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
