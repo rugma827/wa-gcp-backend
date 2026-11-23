@@ -183,7 +183,7 @@ async def _call_mcp_tool(tool_name: str, arguments: dict) -> dict:
         "params": {"name": tool_name, "arguments": arguments},
     }
     try:
-        async with httpx.AsyncClient(timeout=300) as client:
+        async with httpx.AsyncClient(timeout=3600) as client:
             resp = await client.post(
                 _MCP_URL,
                 json=payload,
