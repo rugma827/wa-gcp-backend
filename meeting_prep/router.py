@@ -19,6 +19,7 @@ UI contract (unchanged from AWS version):
   GET  /meeting-prep/download-pptx/{id} → .pptx file
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -31,6 +32,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
+from google.cloud import firestore as _firestore
 from google.cloud import secretmanager
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -42,6 +44,27 @@ from bq_cache import get_cached, get_meeting_context, put_cached, put_meeting_co
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/meeting-prep", tags=["Meeting Prep"])
+
+# ── Firestore progress client ─────────────────────────────────────────────────
+
+_fs: Optional[_firestore.Client] = None
+
+
+def _get_fs() -> _firestore.Client:
+    global _fs
+    if _fs is None:
+        _fs = _firestore.Client(project="agentic-wealthadvisor")
+    return _fs
+
+
+def _poll_firestore_progress(task_id: str) -> Optional[dict]:
+    try:
+        doc = _get_fs().collection("meeting_prep_progress").document(task_id).get()
+        return doc.to_dict() if doc.exists else None
+    except Exception as e:
+        logger.warning("Firestore progress poll failed for task_id=%s: %s", task_id, e)
+        return None
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -451,51 +474,88 @@ def _resolve_client_name_from_event(uid: str, event_id: str) -> Optional[str]:
 
 @router.post("/client-prep-direct")
 async def client_prep_direct(req: ClientPrepDirectRequest, uid: str = Depends(verify_token)):
-    """On-demand meeting prep. Passes free-form task to wa-mcp for name resolution.
+    """On-demand meeting prep — returns task_id immediately; MCP runs in background.
 
-    UI contract: {"result":"meeting_prep_complete","task_id":"...","meetings":[...]}
+    UI contract: {"result":"meeting_prep_pending","task_id":"..."}
     """
     today = cache_today()
     client_name = req.client_name.strip()
 
-    # If frontend sent a calendar event ID instead of a name, resolve it first
     if _is_calendar_event_id(client_name):
         resolved = _resolve_client_name_from_event(uid, client_name)
         if resolved:
-            logger.info("[client-prep-direct] resolved event_id=%s to client_name=%r", client_name, resolved)
             client_name = resolved
-        else:
-            logger.warning("[client-prep-direct] could not resolve event_id=%s, using as-is", client_name)
 
+    task_id = uuid.uuid4().hex
     task = f"Generate full meeting brief for {client_name}"
-    logger.info("[client-prep-direct] task=%r mcp_url=%s", task, _MCP_URL)
+    logger.info("[client-prep-direct] task=%r task_id=%s mcp_url=%s", task, task_id, _MCP_URL)
 
-    # Call wa-mcp — MCP resolves client id from the name in the task
-    result = await _call_mcp_tool("get_meeting_brief", {"task": task})
-    logger.info("[client-prep-direct] mcp_status=%s mcp_keys=%s", result.get("status"), list(result.get("data", {}).keys()))
+    async def _bg():
+        try:
+            result = await _call_mcp_tool("get_meeting_brief", {"task": task, "task_id": task_id})
+            status = result.get("status")
+            if status not in ("ok", "partial"):
+                _get_fs().collection("meeting_prep_progress").document(task_id).set({
+                    "pct": 100, "message": "Failed", "done": True,
+                    "result": {"status": "error", "message": result.get("data", {}).get("message", "Meeting prep failed")},
+                    "updated_at": _firestore.SERVER_TIMESTAMP,
+                })
+                return
+            data = result.get("data", {})
+            meeting_id = data.get("meeting_id") or f"direct_{uuid.uuid4().hex[:8]}"
+            client_id = data.get("client_id", "")
+            brief = data.get("result", data)
+            _ensure_meeting_context(client_id, meeting_id, today)
+            put_cached(f"cockpit#{meeting_id}", today, brief)
+            # Always write final Firestore doc — covers cached MCP responses that skip progress writes
+            doc = _get_fs().collection("meeting_prep_progress").document(task_id).get()
+            if not doc.exists or not doc.to_dict().get("done"):
+                _get_fs().collection("meeting_prep_progress").document(task_id).set({
+                    "pct": 100, "message": "Meeting brief ready", "done": True,
+                    "result": brief,
+                    "updated_at": _firestore.SERVER_TIMESTAMP,
+                })
+        except Exception as e:
+            logger.error("[client-prep-direct] background task failed: %s", e, exc_info=True)
+            try:
+                _get_fs().collection("meeting_prep_progress").document(task_id).set({
+                    "pct": 100, "message": "Failed", "done": True,
+                    "result": {"status": "error", "message": str(e)},
+                    "updated_at": _firestore.SERVER_TIMESTAMP,
+                })
+            except Exception:
+                pass
 
-    status = result.get("status")
-    if status == "needs_input":
-        raise HTTPException(status_code=422, detail=result.get("question", "More input required"))
-    if status not in ("ok", "partial"):
-        raise HTTPException(status_code=502, detail=result.get("data", {}).get("message", "Meeting prep failed"))
+    asyncio.create_task(_bg())
+    return {"result": "meeting_prep_pending", "task_id": task_id}
 
-    data = result.get("data", {})
-    # MCP returns client_id and meeting_id at top of data; structured brief is in data.result
-    meeting_id = data.get("meeting_id") or f"direct_{uuid.uuid4().hex[:8]}"
-    client_id = data.get("client_id", "")
-    brief = data.get("result", data)  # structured fields (client, holdings, risk, …) the UI reads
-    cache_key = f"cockpit#{meeting_id}"
 
-    if not req.force_refresh or not get_cached(cache_key, today):
-        _ensure_meeting_context(client_id, meeting_id, today)
-        put_cached(cache_key, today, brief)
+@router.get("/progress/{task_id}")
+async def meeting_prep_progress(task_id: str, uid: str = Depends(verify_token)):
+    """SSE stream — polls Firestore for progress updates written by MCP."""
 
-    return {
-        "result": "meeting_prep_complete",
-        "task_id": meeting_id,
-        "meetings": [{"type": "meeting_prep", "data": brief, "meeting_id": meeting_id}],
-    }
+    async def _stream():
+        last_pct = -1
+        for _ in range(900):  # max 15 min
+            doc = _poll_firestore_progress(task_id)
+            if doc:
+                pct = doc.get('pct', 0)
+                if pct != last_pct:  # only emit when something changed
+                    last_pct = pct
+                    yield f"data: {json.dumps({'task_id': task_id, 'pct': pct, 'message': doc.get('message', ''), 'done': doc.get('done', False)})}\n\n"
+                if doc.get('done'):
+                    result = doc.get('result')
+                    if result:
+                        yield f"data: {json.dumps({'task_id': task_id, 'type': 'result', 'result': result})}\n\n"
+                    return
+            await asyncio.sleep(1)
+        yield f"data: {json.dumps({'task_id': task_id, 'pct': 100, 'message': 'Timed out', 'done': True})}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── 6–9. Step-level MCP endpoints ────────────────────────────────────────────
