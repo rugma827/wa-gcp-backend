@@ -152,19 +152,20 @@ async def _dispatch_meeting_prep(client_name: str, uid: str, force_refresh: bool
             meeting_id = data.get("meeting_id") or f"direct_{uuid.uuid4().hex[:8]}"
             client_id = data.get("client_id", "")
             brief = data.get("result", data)
+            # Ensure client_id is accessible on brief.client for frontend navigation
+            if client_id and isinstance(brief.get("client"), dict) and not brief["client"].get("customerId") and not brief["client"].get("clientId"):
+                brief["client"]["customerId"] = client_id
             _ensure_meeting_context(client_id, meeting_id, today)
             put_cached(f"cockpit#{meeting_id}", today, brief)
-            doc = _get_fs().collection("meeting_prep_progress").document(task_id).get()
-            if not doc.exists or not doc.to_dict().get("done"):
-                _get_fs().collection("meeting_prep_progress").document(task_id).set({
-                    "pct": 100, "message": "Meeting brief ready", "done": True,
-                    "result": {
-                        "type": "meeting_prep",
-                        "data": brief,
-                        "meeting_id": meeting_id,
-                    },
-                    "updated_at": _firestore.SERVER_TIMESTAMP,
-                })
+            _get_fs().collection("meeting_prep_progress").document(task_id).set({
+                "pct": 100, "message": "Meeting brief ready", "done": True,
+                "result": {
+                    "type": "meeting_prep",
+                    "data": brief,
+                    "meeting_id": meeting_id,
+                },
+                "updated_at": _firestore.SERVER_TIMESTAMP,
+            })
         except Exception as e:
             logger.error("[assist] meeting_prep bg task failed: %s", e, exc_info=True)
             try:
