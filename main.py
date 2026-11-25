@@ -37,7 +37,7 @@ if not _IS_PROD:
     _ALLOWED_ORIGINS.append("null")
 
 _CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-_CORS_HEADERS = "Authorization, Content-Type, X-Requested-With"
+_CORS_HEADERS = "Authorization, Content-Type, X-Requested-With, X-Session-ID"
 
 
 # ── CORS middleware ───────────────────────────────────────────────────────────
@@ -120,8 +120,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # ── Routers ───────────────────────────────────────────────────────────────────
 
 from meeting_prep.router import router as meeting_prep_router
+from assist.router import router as assist_router
 
 app.include_router(meeting_prep_router)
+app.include_router(assist_router)
 
 # Future modules — uncomment when ready:
 # from morning_notes.router import router as morning_notes_router
@@ -138,7 +140,7 @@ def health():
     return {
         "status": "healthy",
         "service": "wa-backend",
-        "modules": ["meeting_prep"],
+        "modules": ["meeting_prep", "assist"],
     }
 
 

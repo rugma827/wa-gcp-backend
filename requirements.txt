@@ -1,8 +1,10 @@
+# Python version: 3.12 (required — pydantic-core has no wheels for 3.13+)
 # Web framework
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 
 # GCP
+google-cloud-aiplatform==1.68.0
 google-cloud-bigquery==3.25.0
 google-cloud-secret-manager==2.20.2
 google-cloud-firestore==2.19.0
