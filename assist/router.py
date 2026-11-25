@@ -19,8 +19,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import vertexai
-from vertexai.generative_models import GenerativeModel
+from google import genai
 
 from auth_dependency import verify_token
 from google.cloud import firestore as _firestore
@@ -39,13 +38,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/assist", tags=["Assist"])
 
 _PROJECT = os.getenv("GCP_PROJECT_ID", "agentic-wealthadvisor")
-_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
+_LOCATION = os.getenv("GCP_LOCATION", "us-west1")
 _MCP_URL = os.getenv("MCP_SERVER_URL", "https://wa-mcp-placeholder.run.app/mcp")
 
-# ── Vertex AI init ────────────────────────────────────────────────────────────
-# Gemini inference — gemini-3.5-flash-lite available in global
-vertexai.init(project=_PROJECT, location="global")
-_model = GenerativeModel("gemini-3.5-flash-lite")
+# ── Gemini client ────────────────────────────────────────────────────────────
+
+_genai_client = genai.Client(vertexai=True, project=_PROJECT, location="global")
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -103,7 +101,11 @@ async def _classify_intent(message: str, history: list, pending_intent: Optional
 USER: {message}"""
 
     try:
-        response = await asyncio.to_thread(_model.generate_content, prompt)
+        response = await asyncio.to_thread(
+            _genai_client.models.generate_content,
+            model="gemini-3.5-flash-lite",
+            contents=prompt,
+        )
         text = response.text.strip()
         # Strip markdown code fences if present
         if text.startswith("```"):
