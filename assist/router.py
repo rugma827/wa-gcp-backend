@@ -43,9 +43,9 @@ _LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 _MCP_URL = os.getenv("MCP_SERVER_URL", "https://wa-mcp-placeholder.run.app/mcp")
 
 # ── Vertex AI init ────────────────────────────────────────────────────────────
-# Gemini inference — gemini-2.0-flash-lite available in us-west1
-vertexai.init(project=_PROJECT, location="us-west1")
-_model = GenerativeModel("gemini-2.0-flash-lite")
+# Gemini inference — gemini-3.5-flash-lite available in global
+vertexai.init(project=_PROJECT, location="global")
+_model = GenerativeModel("gemini-3.5-flash-lite")
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
