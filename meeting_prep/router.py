@@ -265,41 +265,62 @@ class UpcomingEventsRequest(BaseModel):
     num_days: int = 2
 
 
+def _generate_auth_url(uid: str) -> str:
+    """Generate a Google OAuth URL for the given uid."""
+    flow = _make_flow()
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=uid,
+    )
+    return auth_url
+
+
 # ── 1. check-auth ─────────────────────────────────────────────────────────────
 
 @router.post("/check-auth")
 def check_auth(req: BaseRequest, uid: str = Depends(verify_token)):
-    """Check if user has a valid Google Calendar token in Secret Manager.
-
-    Returns {"status":"authenticated"} or 401 with authorization_url.
-    UI contract: same shape as AWS AgentCore check_auth response.
-    """
     token_data = _load_calendar_token(uid)
-    if token_data and token_data.get("access_token"):
-        connected_at = token_data.get("connected_at")
-        if connected_at:
-            age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(connected_at)).days
-            if age_days < _CALENDAR_TOKEN_TTL_DAYS:
-                return {"status": "authenticated"}
-            # Token TTL expired — fall through to re-auth
-        else:
+    if token_data and token_data.get("access_token") and token_data.get("refresh_token"):
+        # Validate the token is actually usable by attempting a refresh
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        try:
+            creds_raw = _get_secret("google-oauth-credentials")
+            web = json.loads(creds_raw).get("web", json.loads(creds_raw))
+            creds = Credentials(
+                token=token_data.get("access_token"),
+                refresh_token=token_data.get("refresh_token"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=web["client_id"],
+                client_secret=web["client_secret"],
+                scopes=_OAUTH_SCOPES,
+            )
+            # Force a refresh to detect revoked tokens
+            creds.refresh(Request())
+            # Token is valid — update stored token with fresh access token
+            _save_calendar_token(uid, {
+                "access_token": creds.token,
+                "refresh_token": creds.refresh_token,
+                "expiry": creds.expiry.isoformat() if creds.expiry else None,
+                "connected_at": token_data.get("connected_at"),
+            })
             return {"status": "authenticated"}
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "invalid_grant" in err_str or "token has been expired or revoked" in err_str:
+                logger.warning("check-auth: token revoked for uid=%s, forcing re-auth", uid)
+                # Fall through to generate auth URL
+            else:
+                logger.error("check-auth: unexpected token error for uid=%s: %s", uid, exc)
+                # Fall through to generate auth URL
 
-    # Not connected or TTL expired — generate OAuth URL
+    # No token or token invalid — generate OAuth URL
     try:
-        flow = _make_flow()
-        auth_url, _ = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-            state=uid,  # pass uid through OAuth state so callback knows who to store for
-        )
         raise HTTPException(
             status_code=401,
-            detail={
-                "status": "unauthenticated",
-                "authorization_url": auth_url,
-            },
+            detail={"status": "unauthenticated", "authorization_url": _generate_auth_url(uid)},
         )
     except HTTPException:
         raise
@@ -391,7 +412,7 @@ def _fetch_calendar_events(uid: str, day_offset: int, num_days: int) -> dict:
     if service is None:
         raise HTTPException(
             status_code=401,
-            detail={"status": "unauthenticated", "authorization_url": None},
+            detail={"status": "unauthenticated", "authorization_url": _generate_auth_url(uid)},
         )
 
     from datetime import timedelta
@@ -419,10 +440,10 @@ def _fetch_calendar_events(uid: str, day_offset: int, num_days: int) -> dict:
     except Exception as exc:
         err_str = str(exc).lower()
         if "invalid_grant" in err_str or "token" in err_str or "401" in err_str:
-            # Token expired and refresh failed — force re-auth
+            # Token expired and refresh failed — force re-auth with a proper auth URL
             raise HTTPException(
                 status_code=401,
-                detail={"status": "unauthenticated", "authorization_url": None},
+                detail={"status": "unauthenticated", "authorization_url": _generate_auth_url(uid)},
             )
         logger.error("Calendar fetch failed for uid=%s: %s", uid, exc)
         raise HTTPException(status_code=502, detail="Failed to fetch calendar events")
